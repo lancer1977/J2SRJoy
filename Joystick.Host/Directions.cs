@@ -1,7 +1,6 @@
-﻿namespace Joystick.Host
+﻿namespace Joystick.Core;
+
+public enum Directions
 {
-    public enum Directions
-    {
-        None, Up, Down, Left, Right, UpLeft, UpRight, DownLeft, DownRight
-    }
+    None, Up, Down, Left, Right, UpLeft, UpRight, DownLeft, DownRight
 }
