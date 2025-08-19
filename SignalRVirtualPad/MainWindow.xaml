@@ -1,0 +1,28 @@
+﻿<Window x:Class="SignalRVirtualPad.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="SignalR Virtual Pad" Height="220" Width="440">
+    <Grid Margin="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+            <TextBlock Text="Hub URL:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+            <TextBox x:Name="HubUrlBox" Width="320" Text="https://localhost:5001/gamehub"/>
+        </StackPanel>
+
+        <StackPanel Orientation="Horizontal" Grid.Row="1" Margin="0,0,0,8" >
+            <Button x:Name="ConnectBtn" Width="100" Content="Connect" Click="ConnectBtn_Click" Margin="0,0,8,0"/>
+            <Button x:Name="DisconnectBtn" Width="100" Content="Disconnect" Click="DisconnectBtn_Click" IsEnabled="False"/>
+        </StackPanel>
+
+        <StackPanel Grid.Row="2">
+            <TextBlock x:Name="StatusText" Text="Status: Disconnected" />
+            <TextBlock x:Name="LastMsgText" Text="Last message: (none)" Margin="0,8,0,0"/>
+            <TextBlock Text="Tip: Messages like { type:'move', direction:'Up', strength:1.0 }" Opacity=".7" />
+        </StackPanel>
+    </Grid>
+</Window>
