@@ -1,7 +1,22 @@
-﻿namespace Joystick.Core;
+﻿using System.Text.Json.Serialization;
 
-public record JoystickVote
+namespace Joystick.Core;
+
+ 
+public interface JoystickSample
 {
-    //public UserId UserID {get;set;}
-    public Directions Direction { get; set; }
+    [JsonPropertyName("ts")]
+    public int TS { get; set; }
+
+    [JsonPropertyName("gamepadId")]
+    public string GamepadId { get; set; }
+ 
+    [JsonPropertyName("direction")]
+    public Directions Direction { get; set; } 
+    [JsonPropertyName("buttons")]
+    public int[] Buttons { get; set; } 
+
+
+    [JsonPropertyName("axes")]
+    public int[] Axes { get; set; }
 }
