@@ -1,8 +1,10 @@
 ﻿
-using System.Windows;
-using System.Windows.Threading;
 using Joystick.Core;
 using Microsoft.AspNetCore.SignalR.Client;
+using System.Data.Common;
+using System.Diagnostics;
+using System.Windows;
+using System.Windows.Threading;
 
 namespace SignalRVirtualPad;
 
@@ -26,10 +28,12 @@ public partial class MainWindow : Window
 
             _pad ??= new VirtualGamepadService();
             await _pad.EnsureConnectedAsync();
-            var builder = new HubConnectionBuilder()
+            _client = new HubConnectionBuilder()
                 .WithAutomaticReconnect()
                 .WithUrl(HubUrlBox.Text).Build();
-            await builder.StartAsync(_cts.Token);
+            await _client.StartAsync(_cts.Token);
+            await _client.InvokeAsync("RegisterJoystick");
+            _client.On<JoystickSample[]>("JoystickUpdate", OnJoystickUpdate);
             DisconnectBtn.IsEnabled = true;
             StatusText.Text = "Status: Connected";
         }
@@ -38,6 +42,31 @@ public partial class MainWindow : Window
             ConnectBtn.IsEnabled = true;
             StatusText.Text = $"Status: Error - {ex.Message}";
         }
+    }
+    private JoystickCommand ToCommand(JoystickSample[] arg)
+    {
+        var command = new JoystickCommand();
+
+        var last = arg.LastOrDefault();
+        if (last == null)
+        {
+            Debug.WriteLine("No samples");
+            _pad?.Neutral();
+            return command;
+        }
+        command.Up = last.Direction == Directions.Up;
+        command.Down = last.Direction == Directions.Down;
+        command.Left = last.Direction == Directions.Left;
+        command.Right = last.Direction == Directions.Right;
+        command.X = last.Buttons.Any(x=>x == 0);
+        command.Y = last.Buttons.Any(x => x == 0);
+        return command;
+    }
+    private Task OnJoystickUpdate(JoystickSample[] arg)
+    {
+        var command = ToCommand(arg);
+        OnInboundMessage(command);
+        return Task.CompletedTask;
     }
 
     private async void DisconnectBtn_Click(object sender, RoutedEventArgs e)
@@ -62,12 +91,22 @@ public partial class MainWindow : Window
         Dispatcher.Invoke(() => StatusText.Text = $"Status: {s}");
     }
 
-    private void OnInboundMessage(JoystickCommand cmd)
+    private void OnInboundMessage(JoystickCommand? inboundCommand)
     {
-        Dispatcher.Invoke(() => LastMsgText.Text = $"Last message: {cmd.Up} {cmd.X} ");
+        if (inboundCommand == null)
+        {
+            Dispatcher.Invoke(() => LastMsgText.Text = $"");
+        }
+        else
+        {
+            JoystickCommand cmd = inboundCommand.Value;
+            Dispatcher.Invoke(() => LastMsgText.Text = $"Last message: {cmd.Up} {cmd.X} ");
 
-        // Drive pad
-        _pad!.Apply(cmd);
+            // Drive pad
+            _pad!.Apply(cmd);
+            
+        }
+  
     }
 
     protected override void OnClosed(EventArgs e)

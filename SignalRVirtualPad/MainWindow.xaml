@@ -11,7 +11,7 @@
 
         <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
             <TextBlock Text="Hub URL:" VerticalAlignment="Center" Margin="0,0,8,0"/>
-            <TextBox x:Name="HubUrlBox" Width="320" Text="https://localhost:5001/gamehub"/>
+            <TextBox x:Name="HubUrlBox" Width="320" Text="https://dev.channelcheevos.com/gameplay"/>
         </StackPanel>
 
         <StackPanel Orientation="Horizontal" Grid.Row="1" Margin="0,0,0,8" >
