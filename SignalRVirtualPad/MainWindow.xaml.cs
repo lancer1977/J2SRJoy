@@ -1,119 +1,278 @@
-﻿
-using Joystick.Core;
+﻿using Joystick.Core;
 using Microsoft.AspNetCore.SignalR.Client;
-using System.Data.Common;
+using System;
 using System.Diagnostics;
+using System.Linq;
+using System.Threading;
+using System.Threading.Channels;
+using System.Threading.Tasks;
 using System.Windows;
-using System.Windows.Threading;
 
-namespace SignalRVirtualPad;
-
-public partial class MainWindow : Window
+namespace SignalRVirtualPad
 {
-    private HubConnection? _client;
-    private VirtualGamepadService? _pad;
-    private readonly CancellationTokenSource _cts = new();
-
-    public MainWindow()
+    public partial class MainWindow : Window
     {
-        InitializeComponent();
-    }
+        private HubConnection? _client;
+        private VirtualGamepadService? _pad;
 
-    private async void ConnectBtn_Click(object sender, RoutedEventArgs e)
-    {
-        try
+        private CancellationTokenSource? _cts;                 // (Re)created on connect
+        private IDisposable? _updateSub;                        // Hub handler subscription
+        private Task? _pumpTask;                                // Background pump
+        private readonly Channel<JoystickCommand> _inbound =    // Burst buffer
+            Channel.CreateUnbounded<JoystickCommand>(new UnboundedChannelOptions
+            {
+                SingleReader = true,
+                SingleWriter = false
+            });
+
+        private volatile bool _running;                         // Pump state
+        private DateTime _lastSeen = DateTime.MinValue;         // For idle -> neutral
+        private bool _neutralApplied;                           // Avoid spamming neutral
+
+        public MainWindow()
         {
-            ConnectBtn.IsEnabled = false;
-            StatusText.Text = "Status: Starting…";
-
-            _pad ??= new VirtualGamepadService();
-            await _pad.EnsureConnectedAsync();
-            _client = new HubConnectionBuilder()
-                .WithAutomaticReconnect()
-                .WithUrl(HubUrlBox.Text).Build();
-            await _client.StartAsync(_cts.Token);
-            await _client.InvokeAsync("RegisterJoystick");
-            _client.On<JoystickSample[]>("JoystickUpdate", OnJoystickUpdate);
-            DisconnectBtn.IsEnabled = true;
-            StatusText.Text = "Status: Connected";
+            InitializeComponent();
         }
-        catch (Exception ex)
+
+        // --- UI Handlers -----------------------------------------------------
+
+        private async void ConnectBtn_Click(object sender, RoutedEventArgs e)
         {
-            ConnectBtn.IsEnabled = true;
-            StatusText.Text = $"Status: Error - {ex.Message}";
-        }
-    }
-    private JoystickCommand ToCommand(JoystickSample[] arg)
-    {
-        var command = new JoystickCommand();
+            try
+            {
+                ConnectBtn.IsEnabled = false;
+                SetStatus("Starting…");
 
-        var last = arg.LastOrDefault();
-        if (last == null)
+                // Fresh CTS per connection attempt
+                _cts?.Cancel();
+                _cts?.Dispose();
+                _cts = new CancellationTokenSource();
+                var ct = _cts.Token;
+
+                // Virtual pad
+                _pad ??= new VirtualGamepadService()
+                { 
+
+                     
+                };
+                
+                await _pad.EnsureConnectedAsync().ConfigureAwait(false);
+
+                // Hub
+                _client = new HubConnectionBuilder()
+                    .WithAutomaticReconnect()
+                    .WithUrl(HubUrlBox.Text)
+                    .Build();
+
+                // Register hub callbacks BEFORE StartAsync
+                _updateSub = _client.On<JoystickSample[]>("JoystickUpdate", async samples =>
+                {
+                    if (samples == null || samples.Length == 0) return;
+                    foreach (var s in samples)
+                    {
+                        var cmd = ToCommand(s);
+                        _inbound.Writer.TryWrite(cmd);
+                        _lastSeen = DateTime.UtcNow;
+                        _neutralApplied = false; // we have activity again
+                    }
+                    await Task.CompletedTask;
+                });
+
+                _client.Reconnecting += error =>
+                {
+                    SetStatus("Reconnecting…");
+                    return Task.CompletedTask;
+                };
+                _client.Reconnected += connectionId =>
+                {
+                    SetStatus("Connected (reconnected)");
+                    return Task.CompletedTask;
+                };
+                _client.Closed += async error =>
+                {
+                    SetStatus("Disconnected");
+                    await Task.CompletedTask;
+                };
+
+                await _client.StartAsync(ct).ConfigureAwait(false);
+
+                // If your hub requires registration
+                await _client.InvokeAsync("RegisterJoystick").ConfigureAwait(false);
+
+                // Start background pump at a steady cadence
+                StartPadPump(ct);
+                Dispatcher.Invoke(() => { DisconnectBtn.IsEnabled = true; });
+                SetStatus("Connected");
+            }
+            catch (OperationCanceledException)
+            {
+                SetStatus("Canceled");
+                Dispatcher.Invoke(() => { ConnectBtn.IsEnabled = true; });
+            }
+            catch (Exception ex)
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    ConnectBtn.IsEnabled = true;
+                });
+                
+                SetStatus($"Error - {ex.Message}");
+            }
+        }
+
+        private async void DisconnectBtn_Click(object sender, RoutedEventArgs e)
         {
-            Debug.WriteLine("No samples");
-            _pad?.Neutral();
-            return command;
-        }
-        command.Up = last.Direction == Directions.Up;
-        command.Down = last.Direction == Directions.Down;
-        command.Left = last.Direction == Directions.Left;
-        command.Right = last.Direction == Directions.Right;
-        command.X = last.Buttons.Any(x=>x == 0);
-        command.Y = last.Buttons.Any(x => x == 0);
-        return command;
-    }
-    private Task OnJoystickUpdate(JoystickSample[] arg)
-    {
-        var command = ToCommand(arg);
-        OnInboundMessage(command);
-        return Task.CompletedTask;
-    }
+            try
+            {
+                DisconnectBtn.IsEnabled = false;
 
-    private async void DisconnectBtn_Click(object sender, RoutedEventArgs e)
-    {
-        try
+                // Stop pump/hub and cleanup
+                _updateSub?.Dispose();
+                _updateSub = null;
+
+                _cts?.Cancel();
+                _cts?.Dispose();
+                _cts = null;
+
+                if (_client is not null)
+                {
+                    await _client.DisposeAsync();
+                    _client = null;
+                }
+
+                _pad?.Dispose();
+                _pad = null;
+
+                _running = false;
+                ConnectBtn.IsEnabled = true;
+                SetStatus("Disconnected");
+            }
+            catch (Exception ex)
+            {
+                SetStatus($"Error - {ex.Message}");
+            }
+        }
+
+        protected override void OnClosed(EventArgs e)
         {
-            DisconnectBtn.IsEnabled = false;
-            _client?.DisposeAsync();
-            _pad?.Dispose();
+            try
+            {
+                _updateSub?.Dispose();
+                _cts?.Cancel();
 
-            ConnectBtn.IsEnabled = true;
-            StatusText.Text = "Status: Disconnected";
+                _client?.DisposeAsync().AsTask().GetAwaiter().GetResult();
+                _pad?.Dispose();
+            }
+            catch { /* swallow during shutdown */ }
+            finally
+            {
+                _running = false;
+                _cts?.Dispose();
+                base.OnClosed(e);
+            }
         }
-        catch (Exception ex)
+
+        // --- Background Pump --------------------------------------------------
+
+        private void StartPadPump(CancellationToken ct)
         {
-            StatusText.Text = $"Status: Error - {ex.Message}";
+            if (_running) return;
+            _running = true;
+
+            _pumpTask = Task.Run(async () =>
+            {
+                var tick = new PeriodicTimer(TimeSpan.FromMilliseconds(16)); // ~60 Hz
+                try
+                {
+                    while (await tick.WaitForNextTickAsync(ct).ConfigureAwait(false))
+                    {
+                        // Drain bursts; keep only latest
+                        JoystickCommand? latest = null;
+                        while (_inbound.Reader.TryRead(out var cmd))
+                            latest = cmd;
+
+                        // Idle watchdog -> neutral
+                        var idle = (DateTime.UtcNow - _lastSeen) > TimeSpan.FromMilliseconds(150);
+                        if (idle && !_neutralApplied)
+                        {
+                            try
+                            {
+                                _pad?.Neutral();
+                                _neutralApplied = true;
+                                SetLastMessage("Neutral (idle timeout)");
+                            }
+                            catch (Exception ex)
+                            {
+                                Debug.WriteLine($"Neutral error: {ex.Message}");
+                            }
+                        }
+
+                        // Apply most recent command at our cadence
+                        if (latest.HasValue)
+                        {
+                            try
+                            {
+                                _pad?.Apply(latest.Value);
+                                SetLastMessage(latest.Value.ToString());
+                            }
+                            catch (Exception ex)
+                            {
+                                Debug.WriteLine($"Apply error: {ex.Message}");
+                            }
+                        }
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    // normal shutdown
+                }
+                finally
+                {
+                    tick.Dispose();
+                }
+            }, ct);
         }
-    }
 
-    private void OnStatusChanged(string s)
-    {
-        Dispatcher.Invoke(() => StatusText.Text = $"Status: {s}");
-    }
+        // --- Mapping & Helpers ------------------------------------------------
 
-    private void OnInboundMessage(JoystickCommand? inboundCommand)
-    {
-        if (inboundCommand == null)
+        private JoystickCommand ToCommand(JoystickSample last)
         {
-            Dispatcher.Invoke(() => LastMsgText.Text = $"");
-        }
-        else
-        {
-            JoystickCommand cmd = inboundCommand.Value;
-            Dispatcher.Invoke(() => LastMsgText.Text = $"Last message: {cmd.Up} {cmd.X} ");
+            // Defensive guards
+            if (last is null || last.Buttons is null || last.Buttons.Length == 0)
+                return default;
 
-            // Drive pad
-            _pad!.Apply(cmd);
-            
-        }
-  
-    }
+            var btns = last.Buttons;
 
-    protected override void OnClosed(EventArgs e)
-    {
-        _cts.Cancel();
-        _client?.DisposeAsync();
-        _pad?.Dispose();
-        base.OnClosed(e);
+            // Small linear scan is fine here (tiny arrays). If needed, swap to HashSet<int>.
+            static bool Has(int[] arr, int id)
+            {
+                for (int i = 0; i < arr.Length; i++)
+                    if (arr[i] == id) return true;
+                return false;
+            }
+
+            // Typical Gamepad API indices:
+            // 0 = A / South, 1 = B / East (or Y depending on layout),
+            // 12 = DPadUp, 13 = DPadDown, 14 = DPadLeft, 15 = DPadRight
+            var cmd = new JoystickCommand
+            {
+                X = Has(btns, 0),
+                Y = Has(btns, 1),
+                Up = Has(btns, 12),
+                Down = Has(btns, 13),
+                Left = Has(btns, 14),
+                Right = Has(btns, 15),
+            };
+
+            // Debug print once per sample batch line
+            Debug.WriteLine($"Buttons: {string.Join(",", btns)} -> {cmd}");
+            return cmd;
+        }
+
+        private void SetStatus(string text)
+            => Dispatcher.Invoke(() => StatusText.Text = $"Status: {text}");
+
+        private void SetLastMessage(string text)
+            => Dispatcher.Invoke(() => LastMsgText.Text = $"Last message: {text}");
     }
 }

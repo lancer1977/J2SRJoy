@@ -24,8 +24,10 @@ namespace SignalRVirtualPad
             if (_x360 is not null) return Task.CompletedTask;
 
             _client = new ViGEmClient();
+            
             _x360 = _client.CreateXbox360Controller();
             _x360.AutoSubmitReport = true;
+            
             _x360.Connect();
             Neutral();
             return Task.CompletedTask;
