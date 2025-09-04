@@ -10,7 +10,6 @@ trigger:
   branches:
     include:
     - refs/heads/main 
-
 jobs:
 - job: Phase_1 
   cancelTimeoutInMinutes: 1
