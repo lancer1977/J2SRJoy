@@ -1,15 +1,15 @@
 # Starter pipeline
 name: 1.0.0.$(rev:r)
 variables: 
+- group: Pat 
 - name: Project.Path
-  value: '**/Joystick.Core.csproj'
-- name: BuildConfiguration
-  value: Release
+  value: '**/Joystick.Core.csproj' 
+- name: CDN_PATH
+  value: '/data/j2srjoy' 
 trigger:
   branches:
     include:
     - refs/heads/main 
-
 jobs:
 - job: Phase_1 
   cancelTimeoutInMinutes: 1
@@ -23,10 +23,18 @@ jobs:
       command: 'pack'
       packagesToPack: '$(Project.Path)' 
       versioningScheme: 'byBuildNumber'
-      arguments: '-c $(BuildConfiguration)  --include-source --include-pdb' 
+      arguments: '-c Release --include-source --include-pdb' 
   - task: DotNetCoreCLI@2
     inputs:
       command: 'push'
       packagesToPush: '$(Build.ArtifactStagingDirectory)/*.nupkg'
       nuGetFeedType: 'internal'
       publishVstsFeed: '015fc12f-cd63-4ab4-8d6a-dc889e53bf70'
+  - script: docfx
+    displayName: Build DocFX
+  - script: |
+      set -eux
+      ssh-keyscan -p 2222 192.168.0.21 >> ~/.ssh/known_hosts
+      ssh -p 2222 lancer1977@192.168.0.21 "mkdir -p ${CDN_PATH}"      
+      rsync -az --delete -e 'ssh -i ~/.ssh/id_rsa -p 2222 -o StrictHostKeyChecking=no' ./_site/ lancer1977@192.168.0.21:${CDN_PATH}/
+  displayName: Deploy _site to CDN via rsync 
