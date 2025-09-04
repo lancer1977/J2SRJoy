@@ -1,0 +1,12 @@
+{
+  "id": "j2srjoy",
+  "title": "J2SRJoy",
+  "summary": "Joystick To Signal R Joystick",
+  "docsHref": "/J2SRJoy/index.html",
+  "imageHref": "/J2SRJoy/images/logo.png",
+  "repoHref": "https://github.com/lancer1977/J2SRJoy",
+  "version": "1.0.0",
+  "tags": ["signalr"],
+  "updated": "2025-09-01",
+  "color": "#f39c12"
+}
