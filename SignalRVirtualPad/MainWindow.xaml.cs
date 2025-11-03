@@ -1,11 +1,7 @@
 ﻿using Joystick.Core;
 using Microsoft.AspNetCore.SignalR.Client;
-using System;
 using System.Diagnostics;
-using System.Linq;
-using System.Threading;
 using System.Threading.Channels;
-using System.Threading.Tasks;
 using System.Windows;
 
 namespace SignalRVirtualPad
